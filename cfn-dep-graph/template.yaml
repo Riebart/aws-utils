@@ -1,0 +1,226 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Parameters:
+  S3Bucket:
+    Description: The bucket associated with the prefix that this stack is
+      permitted to generate presigned URLs for.
+    Type: String
+  S3Prefix:
+    Description: The prefix associated with the bucket that this stack is
+      permitted to generate presigned URLs for.
+    Type: String
+  Salt:
+    Description: The private salt used to generate the HAMC signature of valid
+      requests.
+    Type: String
+
+Conditions:
+  PrefixEmpty: !Equals [ !Ref S3Prefix, "" ]
+
+Resources:
+  API:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Description: Base API for fetching a presigned URL object, or generating
+        a new presigned URL.
+      Name: !Ref AWS::StackName
+  ObjectResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      PathPart: object
+      ParentId: !GetAtt API.RootResourceId
+      RestApiId: !Ref API
+  ObjectFriendlyRsrc:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      PathPart: '{FriendlyName}'
+      ParentId: !Ref ObjectResource
+      RestApiId: !Ref API
+  ObjectRequestRsrc:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      PathPart: '{Request}'
+      ParentId: !Ref ObjectFriendlyRsrc
+      RestApiId: !Ref API
+  ObjectSignatureRsrc:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      PathPart: '{Signature}'
+      ParentId: !Ref ObjectRequestRsrc
+      RestApiId: !Ref API
+  ObjectGetMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      HttpMethod: GET
+      MethodResponses:
+        - StatusCode: 200
+        - StatusCode: 302
+          ResponseParameters:
+            method.response.header.Location: True
+      AuthorizationType: NONE
+      ApiKeyRequired: false
+      ResourceId: !Ref ObjectSignatureRsrc
+      RestApiId: !Ref API
+      Integration:
+        Type: AWS
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${LambdaFunc}/invocations
+        IntegrationHttpMethod: POST
+        IntegrationResponses:
+          - StatusCode: 200
+            SelectionPattern: "^null$"
+          - StatusCode: 302
+            ResponseParameters:
+              method.response.header.Location: integration.response.body.Location
+        PassthroughBehavior: WHEN_NO_TEMPLATES
+        RequestTemplates:
+          application/json:
+            !Sub |
+              {
+                "Method": "Fetch",
+                "S3Bucket": "${S3Bucket}",
+                "S3Prefix": "${S3Prefix}",
+                "Salt": "${Salt}",
+                "APIDomain": "https://${API}.execute-api.${AWS::Region}.amazonaws.com",
+                "FriendlyName": "$input.params('FriendlyName')",
+                "Request": "$input.params('Request')",
+                "Signature": "$input.params('Signature')"
+              }
+  # UrlResource:
+  #   Type: AWS::ApiGateway::Resource
+  #   Properties:
+  #     PathPart: url
+  #     ParentId: !GetAtt API.RootResourceId
+  #     RestApiId: !Ref API
+  # UrlFriendlyRsrc:
+  #   Type: AWS::ApiGateway::Resource
+  #   Properties:
+  #     PathPart: '{FriendlyName}'
+  #     ParentId: !Ref UrlResource
+  #     RestApiId: !Ref API
+  # UrlRequestRsrc:
+  #   Type: AWS::ApiGateway::Resource
+  #   Properties:
+  #     PathPart: '{Request}'
+  #     ParentId: !Ref UrlFriendlyRsrc
+  #     RestApiId: !Ref API
+  # UrlSignatureRsrc:
+  #   Type: AWS::ApiGateway::Resource
+  #   Properties:
+  #     PathPart: '{Signature}'
+  #     ParentId: !Ref UrlRequestRsrc
+  #     RestApiId: !Ref API
+  # UrlGetMethod:
+  #   Type: AWS::ApiGateway::Method
+  #   Properties:
+  #     HttpMethod: GET
+  #     MethodResponses:
+  #       - StatusCode: 200
+  #     AuthorizationType: NONE
+  #     ApiKeyRequired: false
+  #     ResourceId: !Ref UrlSignatureRsrc
+  #     RestApiId: !Ref API
+  #     Integration:
+  #       Type: AWS
+  #       Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${LambdaFunc}/invocations
+  #       IntegrationHttpMethod: POST
+  #       IntegrationResponses:
+  #         - StatusCode: 200
+  #       PassthroughBehavior: WHEN_NO_TEMPLATES
+  #       RequestTemplates:
+  #         application/json:
+  #           !Sub |
+  #             {
+  #               "Method": "Generate",
+  #               "S3Bucket": "${S3Bucket}",
+  #               "S3Prefix": "${S3Prefix}",
+  #               "Salt": "${Salt}",
+  #               "APIDomain": "https://${API}.execute-api.${AWS::Region}.amazonaws.com",
+  #               "FriendlyName": "$input.params('FriendlyName')",
+  #               "Request": "$input.params('Request')",
+  #               "Signature": "$input.params('Signature')"
+  #             }
+  APIDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - ObjectGetMethod
+      # - UrlGetMethod
+    Properties:
+      Description: Initial CloudFormation deployment
+      RestApiId: !Ref API
+      StageName: Main
+  ObjectGetPermissions:
+    Type: AWS::Lambda::Permission
+    DependsOn:
+      - ObjectGetMethod
+    Properties:
+      FunctionName: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${LambdaFunc}
+      Action: lambda:InvokeFunction
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${API}/*/GET/object/*/*/*
+      Principal: apigateway.amazonaws.com
+  # UrlGetPermissions:
+  #   Type: AWS::Lambda::Permission
+  #   DependsOn:
+  #     - UrlGetMethod
+  #   Properties:
+  #     FunctionName: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${LambdaFunc}
+  #     Action: lambda:InvokeFunction
+  #     SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${API}/*/GET/url/*/*/*
+  #     Principal: apigateway.amazonaws.com
+
+  LambdaFunc:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - LambdaRole
+    Properties:
+      Description: Asynchronously generate and spawn the Lambda computation kernels
+        necessary to fetch the requested data, returning a unique ID that can be used
+        to check on the status of the query.
+      Role: !Sub arn:aws:iam::${AWS::AccountId}:role/${LambdaRole}
+      MemorySize: "128"
+      Timeout: "10"
+      Runtime: python2.7
+      Handler: index.handler
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return True
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+        Version: '2012-10-17'
+      Policies:
+        - PolicyName: S3PSUPolicy
+          PolicyDocument:
+            Statement:
+              - Action:
+                  - s3:GetObject
+                Effect: Allow
+                Resource:
+                  - !If
+                    - PrefixEmpty
+                    - !Sub arn:aws:s3:::${S3Bucket}
+                    - !Sub arn:aws:s3:::${S3Bucket}/${S3Prefix}
+                  - !If
+                    - PrefixEmpty
+                    - !Sub arn:aws:s3:::${S3Bucket}/*
+                    - !Sub arn:aws:s3:::${S3Bucket}/${S3Prefix}/*
+                Sid: Stmt1462555988001
+              - Action:
+                  - s3:GetBucketLocation
+                Effect: Allow
+                Resource:
+                  - !Sub arn:aws:s3:::${S3Bucket}
+                Sid: Stmt1462555988002
+              - Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Effect: Allow
+                Resource: "*"
+                Sid: Stmt1462555988003
+            Version: '2012-10-17'
