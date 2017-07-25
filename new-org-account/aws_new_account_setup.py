@@ -151,6 +151,12 @@ def configure_admin_user(session, account_id):
     print "IAM user password changed to:", password
 
 
+def configure_ec2_spot_datafeed(session, account_id, bucket):
+    ec2 = session.client("ec2")
+    ec2.create_spot_datafeed_subscription(
+        Bucket=bucket, Prefix="SpotDatafeed/%d" % account_id)
+
+
 def __main():
     parser = argparse.ArgumentParser(
         description="""Apply a standard set of configuration controls
@@ -169,8 +175,13 @@ def __main():
         help="The AWS Organization policy to apply to the account",
         required=True)
     parser.add_argument(
-        "--target-bucket",
+        "--target-cloudtrail-bucket",
         help="The bucket name to send CloudTrail log events to",
+        required=True)
+    parser.add_argument(
+        "--target-spot-datafeed-bucket",
+        help="""The bucket name to send EC2 spot instance price datafeed log events to. The created
+        datafeed will have the prefix of SpotDatafeed/<AccountId>.""",
         required=True)
     pargs = parser.parse_args()
 
@@ -189,8 +200,11 @@ def __main():
         aws_session_token=credentials["Credentials"]["SessionToken"])
     print "Session created."
 
-    configure_cloudtrail(session, pargs.account_id, pargs.target_bucket)
+    configure_cloudtrail(session, pargs.account_id,
+                         pargs.target_cloudtrail_bucket)
     configure_admin_user(session, pargs.account_id)
+    configure_ec2_spot_datafeed(session, pargs.account_id,
+                                pargs.target_spot_datafeed_bucket)
 
     print "Attaching CloudTrailSteadyState policy to account."
     org = boto3.client("organizations")

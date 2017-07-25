@@ -21,7 +21,8 @@ A good suggested SCP is:
                 "cloudtrail:RemoveTags",
                 "cloudtrail:StartLogging",
                 "cloudtrail:StopLogging",
-                "cloudtrail:UpdateTrail"
+                "cloudtrail:UpdateTrail",
+                "ec2:DeleteSpotDatafeedSubscription"
             ],
             "Resource": [
                 "*"
