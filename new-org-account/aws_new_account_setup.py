@@ -151,10 +151,15 @@ def configure_admin_user(session, account_id):
     print "IAM user password changed to:", password
 
 
-def configure_ec2_spot_datafeed(session, account_id, bucket):
-    ec2 = session.client("ec2")
-    ec2.create_spot_datafeed_subscription(
-        Bucket=bucket, Prefix="SpotDatafeed/%d" % account_id)
+def configure_ec2_spot_datafeed(session, bucket, regions):
+    # These will eventually propagate across regions automatically, but this makes it explicit and
+    # immediate.
+    #
+    # This will silently not work if the bucket isn't in the us-east-1 region.
+    for region in regions:
+        ec2 = session.client("ec2", region_name=region)
+        print ec2.create_spot_datafeed_subscription(
+            Bucket=bucket, Prefix="SpotDatafeed")
 
 
 def __main():
@@ -185,6 +190,15 @@ def __main():
         required=True)
     pargs = parser.parse_args()
 
+    ec2 = boto3.client("ec2")
+    s3 = boto3.client("s3")
+    regions = [r["RegionName"] for r in ec2.describe_regions()["Regions"]]
+    if s3.get_bucket_location(Bucket=pargs.target_spot_datafeed_bucket)[
+            "LocationConstraint"] is not None:
+        raise AssertionError(
+            "Unable to set spot datafeed, target bucket must be in us-east-1/US-STANDARD region."
+        )
+
     # Use STS with the available credentials to assume credentials in the given account.
     print "Assuming role in target account..."
     sts = boto3.client('sts')
@@ -203,8 +217,8 @@ def __main():
     configure_cloudtrail(session, pargs.account_id,
                          pargs.target_cloudtrail_bucket)
     configure_admin_user(session, pargs.account_id)
-    configure_ec2_spot_datafeed(session, pargs.account_id,
-                                pargs.target_spot_datafeed_bucket)
+    configure_ec2_spot_datafeed(session, pargs.target_spot_datafeed_bucket,
+                                regions)
 
     print "Attaching CloudTrailSteadyState policy to account."
     org = boto3.client("organizations")

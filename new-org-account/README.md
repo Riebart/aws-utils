@@ -22,6 +22,7 @@ A good suggested SCP is:
                 "cloudtrail:StartLogging",
                 "cloudtrail:StopLogging",
                 "cloudtrail:UpdateTrail",
+                "ec2:CreateSpotDatafeedSubscription",
                 "ec2:DeleteSpotDatafeedSubscription"
             ],
             "Resource": [
