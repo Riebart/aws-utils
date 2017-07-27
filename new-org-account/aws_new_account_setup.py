@@ -112,7 +112,8 @@ def configure_admin_user(session, account_id):
     print "Creating managed policy for protecting organization assets..."
     iam.create_policy(
         PolicyName="ProtectedOrganizationResources",
-        Description="Provides default-deny control over the Organization roles and resources that cannot be controlled through organization SCPs.",
+        Description="""Provides default-deny control over the Organization roles and resources that
+        cannot be controlled through organization SCPs.""",
         PolicyDocument="""{
             "Version": "2012-10-17",
             "Statement": [
@@ -162,6 +163,87 @@ def configure_ec2_spot_datafeed(session, bucket, regions):
             Bucket=bucket, Prefix="SpotDatafeed")
 
 
+def configure_aws_configservice(session, account_id, bucket, regions):
+    # Note that the target bucket, if it isn't in the same account, needs to have the right
+    # permissions attached to it.
+    #
+    # Ref: http://docs.aws.amazon.com/config/latest/developerguide/s3-bucket-policy.html
+    iam = session.client("iam")
+
+    iam.create_role(
+        RoleName="aws-configservice-role",
+        Path="/service-role/",
+        Description="Role assumed by AWS Config service",
+        AssumeRolePolicyDocument="""{
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Sid": "",
+                    "Effect": "Allow",
+                    "Principal": {
+                        "Service": "config.amazonaws.com"
+                    },
+                    "Action": "sts:AssumeRole"
+                }
+            ]
+        }""")
+    iam.put_role_policy(
+        RoleName="aws-configservice-role",
+        PolicyName="AWSConfigDelivery",
+        PolicyDocument="""{
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                "Effect": "Allow",
+                "Action": [
+                    "s3:PutObject*"
+                ],
+                "Resource": [
+                    "arn:aws:s3:::%s/AWSLogs/%d/*"
+                ],
+                "Condition": {
+                    "StringLike": {
+                    "s3:x-amz-acl": "bucket-owner-full-control"
+                    }
+                }
+                },
+                {
+                "Effect": "Allow",
+                "Action": [
+                    "s3:GetBucketAcl"
+                ],
+                "Resource": "arn:aws:s3:::bucket"
+                }
+            ]
+        }""" % (bucket, account_id, bucket))
+    iam.attach_role_policy(
+        RoleName="aws-configservice-role",
+        PolicyArn="arn:aws:iam::aws:policy/service-role/AWSConfigRole ")
+
+    for region in regions:
+        config = session.client("configservice", region_name=region)
+        config.put_delivery_channel(DeliveryChannel={
+            "name": "default",
+            "s3BucketName": bucket,
+            "configSnapshotDeliveryProperties": {
+                "deliveryFrequency": "One_Hour"
+            }
+        })
+        config.put_configuration_recorder(ConfigurationRecorder={
+            "name":
+            "default",
+            "roleARN":
+            "arn:aws:iam::%d:role/service-role/aws-configservice-role" %
+            account_id,
+            "recordingGroup": {
+                "allSupported": True,
+                "includeGlobalResourceTypes": (region == "us-east-1")
+            }
+        })
+        config.start_configuration_recorder(
+            ConfigurationRecorderName="default")
+
+
 def __main():
     parser = argparse.ArgumentParser(
         description="""Apply a standard set of configuration controls
@@ -180,7 +262,7 @@ def __main():
         help="The AWS Organization policy to apply to the account",
         required=True)
     parser.add_argument(
-        "--target-cloudtrail-bucket",
+        "--target-cloudtrail-awsconfig-bucket",
         help="The bucket name to send CloudTrail log events to",
         required=True)
     parser.add_argument(
@@ -215,10 +297,13 @@ def __main():
     print "Session created."
 
     configure_cloudtrail(session, pargs.account_id,
-                         pargs.target_cloudtrail_bucket)
+                         pargs.target_cloudtrail_awsconfig_bucket)
     configure_admin_user(session, pargs.account_id)
     configure_ec2_spot_datafeed(session, pargs.target_spot_datafeed_bucket,
                                 regions)
+    # configure_aws_configservice(session, pargs.account_id,
+    #                             pargs.target_cloudtrail_awsconfig_bucket,
+    #                             regions)
 
     print "Attaching CloudTrailSteadyState policy to account."
     org = boto3.client("organizations")
