@@ -9,6 +9,40 @@ import tempfile
 import boto3
 
 
+def humansize_to_bytes(val):
+    suffixes = {
+        "k": 1000,
+        "m": 1000**2,
+        "g": 1000**3,
+        "t": 1000**4,
+        "kb": 1000,
+        "mb": 1000**2,
+        "gb": 1000**3,
+        "tb": 1000**4,
+        "Kb": 1000,
+        "Mb": 1000**2,
+        "Gb": 1000**3,
+        "Tb": 1000**4,
+        "kB": 1000,
+        "KB": 1000,
+        "MB": 1000**2,
+        "GB": 1000**3,
+        "TB": 1000**4,
+        "K": 1024,
+        "M": 1024**2,
+        "G": 1024**3,
+        "T": 1024**4,
+        "kiB": 1024,
+        "MiB": 1024**2,
+        "GiB": 1024**3,
+        "TiB": 1024**4
+    }
+    for suffix, value in suffixes.iteritems():
+        if val.endswith(suffix):
+            return int(float(val[:-len(suffix)]) * value)
+    return int(float(val))
+
+
 def __encrypt(pargs):
     if pargs.source is None and pargs.key is None:
         sys.stderr.write(
@@ -65,7 +99,7 @@ def __encrypt(pargs):
         ("aws", "s3", "cp", "--sse", "AES256") + \
         (
             () if pargs.expected_size is None
-            else ("--expected-size", pargs.expected_size)) + \
+            else ("--expected-size", str(humansize_to_bytes(pargs.expected_size)))) + \
         (
             "--metadata",
             "symmetric-key=%s,symmetric-cipher=%s" % (encrypted_passphrase, pargs.symmetric_algorithm),
