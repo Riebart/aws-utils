@@ -1,4 +1,8 @@
 #!/usr/bin/env python
+"""
+Simplify putting and retrieving encrypted contents from S3 by encoding PGP protected passphrase
+information and symmetric crypto information into S3 object metadata.
+"""
 
 import os
 import base64
@@ -10,6 +14,11 @@ import boto3
 
 
 def humansize_to_bytes(val):
+    """
+    Convert human-readable numeric values into pure-numeric values. Supports a range of suffixes
+    but assumes most of them map to decimal (1000-based) bases with support for a couple binary
+    suffixes.
+    """
     suffixes = {
         "k": 1000,
         "m": 1000**2,
@@ -44,6 +53,9 @@ def humansize_to_bytes(val):
 
 
 def __encrypt(pargs):
+    """
+    Perform encryption and upload of input data. Tars up directories if given them as a source.
+    """
     if pargs.source is None and pargs.key is None:
         sys.stderr.write(
             "Either the source (a filesystem location) or the S3 key must be specified."
@@ -112,6 +124,9 @@ def __encrypt(pargs):
 
 
 def __decrypt(pargs):
+    """
+    Perform decryption and fetching of data from S3. Untar tarballs if set.
+    """
     s3 = boto3.client("s3")
 
     headers = s3.head_object(Bucket=pargs.bucket, Key=pargs.key)
