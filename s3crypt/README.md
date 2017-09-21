@@ -19,7 +19,7 @@ $ docker save riebart/keybase:latest | s3crypt.py encrypt --bucket docker-images
 Example: Retrieving the same Docker image from S3, decyrpting it, and loading it into Docker.
 
 ```bash
-$ s3crypt.py encrypt --bucket docker-images --key riebart/keybase:latest | docker load
+$ s3crypt.py decrypt --bucket docker-images --key riebart/keybase:latest | docker load
 
 You need a passphrase to unlock the secret key for
 user: "John Doe <john@example.com>"
@@ -34,9 +34,9 @@ Example: Saving secrets to S3 encrypted with PGP, essentially turning S3 into a 
 
 ```bash
 $ echo "Riebart
-UL!6s*d7aj/<P-(IE})9?&v^KA;%n4pwH#NX|$~\By=eV80+WoO>kcTi,mt[Jrq" | s3crypt.py --bucket passwords --key github.com --recipient john@example.com
+UL!6s*d7aj/<P-(IE})9?&v^KA;%n4pwH#NX|$~\By=eV80+WoO>kcTi,mt[Jrq" | s3crypt.py encrypt --bucket passwords --key github.com --recipient john@example.com
 
-$ s3crypt.py encrypt --bucket passwords --key github.com
+$ s3crypt.py decrypt --bucket passwords --key github.com
 
 You need a passphrase to unlock the secret key for
 user: "John Doe <john@example.com>"
