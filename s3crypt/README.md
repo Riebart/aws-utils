@@ -10,10 +10,12 @@ Python, boto3, the AWS CLI, the OpenSSL cli command, the CLI `tar` command, and 
 
 ## Usage
 
+**Note: None of the buckets, PGP keys, or secret material is real. These are all examples.**
+
 Example: Saving a Docker image (potentially containing sensitive information) to S3 with `docker save`.
 
 ```bash
-$ docker save riebart/keybase:latest | s3crypt.py encrypt --bucket docker-images --key riebart/keybase:latest --gpg-recipient john@example.com --estimated-size 1G
+$ docker save riebart/keybase:latest | s3crypt.py encrypt --bucket docker-images --key riebart/keybase:latest --pgp-recipient john@example.com --estimated-size 1G
 ```
 
 Example: Retrieving the same Docker image from S3, decyrpting it, and loading it into Docker.
@@ -34,7 +36,7 @@ Example: Saving secrets to S3 encrypted with PGP, essentially turning S3 into a 
 
 ```bash
 $ echo "Riebart
-UL!6s*d7aj/<P-(IE})9?&v^KA;%n4pwH#NX|$~\By=eV80+WoO>kcTi,mt[Jrq" | s3crypt.py encrypt --bucket passwords --key github.com --recipient john@example.com
+UL!6s*d7aj/<P-(IE})9?&v^KA;%n4pwH#NX|$~\By=eV80+WoO>kcTi,mt[Jrq" | s3crypt.py encrypt --bucket passwords --key github.com --pgp-recipient john@example.com
 
 $ s3crypt.py decrypt --bucket passwords --key github.com
 
