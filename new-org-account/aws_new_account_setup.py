@@ -7,6 +7,8 @@ import time
 from contextlib import contextmanager
 import boto3
 
+ROLE_PROPAGATION_TIMEOUT = 60
+
 AWS_CLOUDTRAIL_NAME = "OrganizationTrail"
 AWS_CLOUDTRAIL_ROLE_NAME = "OrganizationCloudTrailLogs"
 AWS_CLOUDTRAIL_CWL_POLICY_NAME = "PutCloudWatchLogs"
@@ -18,7 +20,7 @@ AWS_CONFIG_SERVICE_ROLE_NAME = "AwsConfigServiceRole"
 AWS_CONFIG_SERVICE_DELIVERY_POLICY_NAME = "AWSConfigDelivery"
 
 
-def configure_cloudtrail(session, account_id, target_bucket):
+def configure_cloudtrail(session, account_id, target_bucket, in_use):
     """
     Configure an all-region CloudTrail trail that syndicates to CloudWatch Logs as well.
     """
@@ -85,11 +87,12 @@ def configure_cloudtrail(session, account_id, target_bucket):
                          AWS_CLOUDTRAIL_NAME)
 
     print "Sleeping for 10 seconds while role propagates to global scope..."
-    time.sleep(10)
+    role_put_time = time.time()
 
     print "Creating trail..."
-    success = True
-    for i in range(50):
+    success = False
+    while time.time(
+    ) - role_put_time < ROLE_PROPAGATION_TIMEOUT and not success:
         try:
             ctrail.create_trail(
                 Name=AWS_CLOUDTRAIL_NAME,
@@ -102,13 +105,19 @@ def configure_cloudtrail(session, account_id, target_bucket):
                 CloudWatchLogsRoleArn="arn:aws:iam::%s:role/%s" %
                 (account_id, AWS_CLOUDTRAIL_ROLE_NAME))
             success = True
-            break
-        except Exception as e:
-            print "Encountered exception creating trail, sleeping and trying again..."
-            print repr(e)
-            print str(e)
-            print e.__dict__
+        except Exception as exc:
+            if exc.response["Error"][
+                    "Code"] == "InvalidCloudWatchLogsRoleArnException":
+                print "  Role not yet propagated..."
+            else:
+                print "Error creating cloudtrail trail"
+                print {
+                    "ErrorRepr": repr(exc),
+                    "ErrorStr": str(exc),
+                    "ErrorDict": exc.__dict__
+                }
             time.sleep(5.0)
+
     if not success:
         print "Trail not created successfully."
         exit(1)
@@ -116,7 +125,7 @@ def configure_cloudtrail(session, account_id, target_bucket):
     print "Trail created and started successfully."
 
 
-def configure_admin_user(session, account_id, admin_role):
+def configure_admin_user(session, account_id, admin_role, in_use):
     """
     Configure an Administrator user with a strong password.
     """
@@ -164,9 +173,10 @@ def configure_admin_user(session, account_id, admin_role):
         Password=password,
         PasswordResetRequired=True)
     print "IAM user (%s) password changed to:" % AWS_IAM_USER_NAME, password
+    return password
 
 
-def configure_ec2_spot_datafeed(session, bucket, regions):
+def configure_ec2_spot_datafeed(session, bucket, regions, in_use):
     # These will eventually propagate across regions automatically, but this makes it explicit and
     # immediate.
     #
@@ -178,7 +188,7 @@ def configure_ec2_spot_datafeed(session, bucket, regions):
             Bucket=bucket, Prefix="SpotDatafeed")
 
 
-def configure_aws_configservice(session, account_id, bucket, regions):
+def configure_aws_configservice(session, account_id, bucket, regions, in_use):
     # Note that the target bucket, if it isn't in the same account, needs to have the right
     # permissions attached to it.
     #
@@ -234,37 +244,80 @@ def configure_aws_configservice(session, account_id, bucket, regions):
     iam.attach_role_policy(
         RoleName=AWS_CONFIG_SERVICE_ROLE_NAME,
         PolicyArn="arn:aws:iam::aws:policy/service-role/AWSConfigRole")
-    print "Sleeping while the AWS ConfigService role propagates to the global scope"
-    time.sleep(25)
+    role_put_time = time.time()
+
+    # Eventually, we'll successfully use this role, and at that time the timeout should be ignored
+    role_put_confirmed = False
 
     for region in regions:
+        # IAM roles take time to propagate to global scope (and even within the same region), so the
+        # first few creations may fail (if the first one is in us-east-1 with the IAM endpoint, it
+        # may succeed while the next one in another region may fail).
+        #
+        # In practice, all regions should have the role within 60 seconds (25 is usually enough, but
+        # 60 seconds for a buffer of safety should be fine).
         config = session.client("config", region_name=region)
         print "Creating ConfigService in %s" % region
-        config.put_configuration_recorder(ConfigurationRecorder={
-            "name":
-            "default",
-            "roleARN":
-            "arn:aws:iam::%s:role/service-role/%s" %
-            (account_id, AWS_CONFIG_SERVICE_ROLE_NAME),
-            "recordingGroup": {
-                "allSupported": True,
-                # "includeGlobalResourceTypes": (region == "us-east-1") # Only record global services in us-east-1
-                "includeGlobalResourceTypes": True
-            }
-        })
-        channel_kwargs = {
-            "DeliveryChannel": {
-                "name": "default",
-                "s3BucketName": bucket,
-                "configSnapshotDeliveryProperties": {
-                    "deliveryFrequency": "One_Hour"
-                }
-            }
-        }
-        print channel_kwargs
-        config.put_delivery_channel(**channel_kwargs)
-        config.start_configuration_recorder(
-            ConfigurationRecorderName="default")
+
+        # Keep track of how far into the creation process we get, don't try to retry parts of the
+        # resources we successfully created.
+        checkpoint = 0
+
+        # Try to create resources in this region as long as the timeout hasn't passed
+        while (time.time() - role_put_time < ROLE_PROPAGATION_TIMEOUT or
+               role_put_confirmed) and checkpoint < 3:
+            try:
+                if checkpoint < 1:
+                    print "    Putting configuration recorder..."
+                    config.put_configuration_recorder(ConfigurationRecorder={
+                        "name":
+                        "default",
+                        "roleARN":
+                        "arn:aws:iam::%s:role/service-role/%s" %
+                        (account_id, AWS_CONFIG_SERVICE_ROLE_NAME),
+                        "recordingGroup": {
+                            "allSupported": True,
+                            # "includeGlobalResourceTypes": (region == "us-east-1") # Only record global services in us-east-1
+                            "includeGlobalResourceTypes": True
+                        }
+                    })
+                    checkpoint = 1
+                elif checkpoint < 2:
+                    channel_kwargs = {
+                        "DeliveryChannel": {
+                            "name": "default",
+                            "s3BucketName": bucket,
+                            "configSnapshotDeliveryProperties": {
+                                "deliveryFrequency": "One_Hour"
+                            }
+                        }
+                    }
+                    print "    Putting delivery channel..."
+                    config.put_delivery_channel(**channel_kwargs)
+                    checkpoint = 2
+                elif checkpoint < 3:
+                    print "    Starting configuration recorder..."
+                    config.start_configuration_recorder(
+                        ConfigurationRecorderName="default")
+                    checkpoint = 3
+                    role_put_confirmed = True
+            except Exception as exc:
+                if exc.response["Error"][
+                        "Code"] == "InsufficientDeliveryPolicyException":
+                    print "  Role not yet propagated..."
+                else:
+                    print "Error creating AWS Config resources at checkpoint %d" % checkpoint
+                    print {
+                        "ErrorRepr": repr(exc),
+                        "ErrorStr": str(exc),
+                        "ErrorDict": exc.__dict__
+                    }
+                time.sleep(5.0)
+
+        if checkpoint < 3:
+            # We timed out!
+            print "Timeout attempting to create AWSConfigService resources in %s" % region
+            exit(1)
 
 
 def aws_account_number(aan):
@@ -311,7 +364,7 @@ def do_the_thing(thing):
         print "\"%s\" succeeded" % thing
 
 
-def cleanup(session, account_id, regions):
+def cleanup(session, account_id, regions, in_use):
     """
     Clean up all resources possibly created by a previous version of this script.
     """
@@ -341,22 +394,23 @@ def cleanup(session, account_id, regions):
             config.delete_delivery_channel(DeliveryChannelName="default")
 
     iam = session.client("iam")
-    with do_the_thing("Delete IAM User login profile"):
-        iam.delete_login_profile(UserName=AWS_IAM_USER_NAME)
-    with do_the_thing("Detach IAM user admin policy"):
-        iam.detach_user_policy(
-            UserName=AWS_IAM_USER_NAME,
-            PolicyArn="arn:aws:iam::aws:policy/AdministratorAccess")
-    with do_the_thing("Detach IAM user restriction policy"):
-        iam.detach_user_policy(
-            UserName=AWS_IAM_USER_NAME,
-            PolicyArn="arn:aws:iam::%s:policy/%s" %
-            (account_id, AWS_IAM_PROTECTION_POLICY_NAME))
-    with do_the_thing("Delete IAM User"):
-        iam.delete_user(UserName=AWS_IAM_USER_NAME)
-    with do_the_thing("Delete IAM Managed Policy"):
-        iam.delete_policy(PolicyArn="arn:aws:iam::%s:policy/%s" %
-                          (account_id, AWS_IAM_PROTECTION_POLICY_NAME))
+    if not in_use:
+        with do_the_thing("Delete IAM User login profile"):
+            iam.delete_login_profile(UserName=AWS_IAM_USER_NAME)
+        with do_the_thing("Detach IAM user admin policy"):
+            iam.detach_user_policy(
+                UserName=AWS_IAM_USER_NAME,
+                PolicyArn="arn:aws:iam::aws:policy/AdministratorAccess")
+        with do_the_thing("Detach IAM user restriction policy"):
+            iam.detach_user_policy(
+                UserName=AWS_IAM_USER_NAME,
+                PolicyArn="arn:aws:iam::%s:policy/%s" %
+                (account_id, AWS_IAM_PROTECTION_POLICY_NAME))
+        with do_the_thing("Delete IAM User"):
+            iam.delete_user(UserName=AWS_IAM_USER_NAME)
+        with do_the_thing("Delete IAM Managed Policy"):
+            iam.delete_policy(PolicyArn="arn:aws:iam::%s:policy/%s" %
+                              (account_id, AWS_IAM_PROTECTION_POLICY_NAME))
     with do_the_thing("Delete CloudTrail CWL role policy"):
         iam.delete_role_policy(
             RoleName=AWS_CLOUDTRAIL_ROLE_NAME,
@@ -380,6 +434,13 @@ def __main():
         description="""Apply a standard set of configuration controls
     to the supplied AWS account.""")
     parser.add_argument(
+        "--in-use",
+        required=False,
+        default=False,
+        action="store_true",
+        help="""Indicate whether the account is in use, in which case care should be taken
+        regarding someresources.""")
+    parser.add_argument(
         "--account-id",
         help="Twelve digit AWS account number",
         type=aws_account_number,
@@ -394,8 +455,12 @@ def __main():
         default=None,
         required=False)
     parser.add_argument(
-        "--target-cloudtrail-awsconfig-bucket",
-        help="The bucket name to send CloudTrail ans ConfigService events to",
+        "--target-cloudtrail-bucket",
+        help="The bucket name to send CloudTrail ans ConfigService events to.",
+        required=True)
+    parser.add_argument(
+        "--target-awsconfig-bucket",
+        help="The bucket name to send AWS ConfigService events to.",
         required=True)
     parser.add_argument(
         "--target-spot-datafeed-bucket",
@@ -441,16 +506,17 @@ def __main():
     print "Session created."
 
     if pargs.cleanup:
-        cleanup(session, pargs.account_id, regions)
+        cleanup(session, pargs.account_id, regions, pargs.in_use)
     else:
         configure_cloudtrail(session, pargs.account_id,
-                             pargs.target_cloudtrail_awsconfig_bucket)
-        configure_admin_user(session, pargs.account_id, pargs.role_name)
+                             pargs.target_cloudtrail_bucket, pargs.in_use)
+        user_password = configure_admin_user(session, pargs.account_id,
+                                             pargs.role_name, pargs.in_use)
         configure_ec2_spot_datafeed(session, pargs.target_spot_datafeed_bucket,
-                                    regions)
+                                    regions, pargs.in_use)
         configure_aws_configservice(session, pargs.account_id,
-                                    pargs.target_cloudtrail_awsconfig_bucket,
-                                    regions)
+                                    pargs.target_awsconfig_bucket, regions,
+                                    pargs.in_use)
 
         if pargs.service_control_policy_id is not None:
             print "Attaching Service Control Policy to account."
@@ -460,6 +526,8 @@ def __main():
                 TargetId=str(pargs.account_id))
 
         print "Signin link: https://%s.signin.aws.amazon.com/console" % pargs.account_id
+        print "Username: %s" % AWS_IAM_USER_NAME
+        print "Password: %s" % user_password
 
 
 if __name__ == "__main__":
