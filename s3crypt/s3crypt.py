@@ -84,7 +84,6 @@ def __encrypt(pargs):
         stdout=subprocess.PIPE)
     gpgresult, _ = gpgproc.communicate(input=passphrase)
     encrypted_passphrase = base64.b64encode(gpgresult)
-    print "Base64 GPG-protected passphrase:", encrypted_passphrase
 
     # Get the exected size of the filesystem source
     if pargs.source is not None and pargs.expected_size is None:
