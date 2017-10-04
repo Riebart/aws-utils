@@ -199,11 +199,11 @@ def __main():
         help="""If specified, points to the local directory or file to send to S3. If
         omitted, stdin is assumed to be the source.""")
     encrypt.add_argument(
-        "--bucket",
+        "--s3-bucket",
         required=True,
         help="""Bucket name for the output object.""")
     encrypt.add_argument(
-        "--key",
+        "--s3-key",
         required=False,
         default=None,
         help="""Key name for the output object. Required if stdin is the source, and option
