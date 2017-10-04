@@ -56,14 +56,14 @@ def __encrypt(pargs):
     """
     Perform encryption and upload of input data. Tars up directories if given them as a source.
     """
-    if pargs.source is None and pargs.key is None:
+    if pargs.source is None and pargs.s3_key is None:
         sys.stderr.write(
             "Either the source (a filesystem location) or the S3 key must be specified."
         )
         exit(1)
 
     isdir = False
-    if pargs.source is not None and pargs.key is None:
+    if pargs.source is not None and pargs.s3_key is None:
         keypath = pargs.source
         if keypath[0] == '/':
             keypath = keypath[1:]
@@ -71,10 +71,10 @@ def __encrypt(pargs):
             keypath = keypath[:-1]
 
         if os.path.isfile(pargs.source):
-            pargs.key = keypath + ".gpgenc"
+            pargs.s3_key = keypath + ".gpgenc"
         elif os.path.isdir(pargs.source):
             isdir = True
-            pargs.key = keypath + ".tar.gpgenc"
+            pargs.s3_key = keypath + ".tar.gpgenc"
 
     # Sufficient entropy for a 256 bit key
     passphrase = base64.b64encode(os.urandom(32))
@@ -115,7 +115,7 @@ def __encrypt(pargs):
             "--metadata",
             "symmetric-key=%s,symmetric-cipher=%s" % (encrypted_passphrase, pargs.symmetric_algorithm),
             "--storage-class", "STANDARD",
-            "-", "s3://%s/%s" % (pargs.bucket, pargs.key)),
+            "-", "s3://%s/%s" % (pargs.s3_bucket, pargs.s3_key)),
         stdin=cryptproc.stdout
     )
 
@@ -128,7 +128,7 @@ def __decrypt(pargs):
     """
     s3 = boto3.client("s3")
 
-    headers = s3.head_object(Bucket=pargs.bucket, Key=pargs.key)
+    headers = s3.head_object(Bucket=pargs.s3_bucket, Key=pargs.s3_key)
     if "Metadata" not in headers:
         sys.stderr.write(
             "Unable to find crypto headers in object metadata. Aborting.")
@@ -160,7 +160,8 @@ def __decrypt(pargs):
         outfd = open(pargs.destination, "wb")
 
     s3proc = subprocess.Popen(
-        ("aws", "s3", "cp", "s3://%s/%s" % (pargs.bucket, pargs.key), "-"),
+        ("aws", "s3", "cp", "s3://%s/%s" % (pargs.s3_bucket, pargs.s3_key),
+         "-"),
         stdout=subprocess.PIPE)
 
     cryptproc = subprocess.Popen(
@@ -224,11 +225,11 @@ def __main():
     )
     decrypt = subparsers.add_parser("decrypt")
     decrypt.add_argument(
-        "--bucket",
+        "--s3-bucket",
         required=True,
         help="""Bucket name for the input object.""")
     decrypt.add_argument(
-        "--key", required=True, help="""Key name for the input object.""")
+        "--s3-key", required=True, help="""Key name for the input object.""")
     decrypt.add_argument(
         "--destination",
         required=False,
