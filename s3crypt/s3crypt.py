@@ -113,7 +113,8 @@ def __encrypt(pargs):
             else ("--expected-size", str(humansize_to_bytes(pargs.expected_size)))) + \
         (
             "--metadata",
-            "symmetric-key=%s,symmetric-cipher=%s" % (encrypted_passphrase, pargs.symmetric_algorithm),
+            "symmetric-key=%s,symmetric-cipher=%s" % (
+                encrypted_passphrase, pargs.symmetric_algorithm),
             "--storage-class", "STANDARD",
             "-", "s3://%s/%s" % (pargs.s3_bucket, pargs.s3_key)),
         stdin=cryptproc.stdout
@@ -126,9 +127,9 @@ def __decrypt(pargs):
     """
     Perform decryption and fetching of data from S3. Untar tarballs if set.
     """
-    s3 = boto3.client("s3")
+    s3_client = boto3.client("s3")
 
-    headers = s3.head_object(Bucket=pargs.s3_bucket, Key=pargs.s3_key)
+    headers = s3_client.head_object(Bucket=pargs.s3_bucket, Key=pargs.s3_key)
     if "Metadata" not in headers:
         sys.stderr.write(
             "Unable to find crypto headers in object metadata. Aborting.")
@@ -175,6 +176,7 @@ def __decrypt(pargs):
     elif pargs.untar:
         untarproc = subprocess.Popen(
             ("tar", "-xf", "-"), cwd=pargs.destination, stdin=cryptproc.stdout)
+        untarproc.communicate()
     else:
         outfd.flush()
         outfd.close()
