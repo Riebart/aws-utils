@@ -15,7 +15,9 @@ Python, boto3, the AWS CLI, the OpenSSL cli command, the CLI `tar` command, and 
 Example: Saving a Docker image (potentially containing sensitive information) to S3 with `docker save`.
 
 ```bash
-$ docker save riebart/keybase:latest | s3crypt.py encrypt --s3-bucket docker-images --s3-key riebart/keybase:latest --pgp-recipient john@example.com --estimated-size 1G
+docker save riebart/keybase:latest | \
+s3crypt.py encrypt --s3-bucket docker-images --s3-key riebart/keybase:latest \
+--pgp-recipient john@example.com --estimated-size 1G
 ```
 
 Example: Retrieving the same Docker image from S3, decrypting it, and loading it into Docker.
