@@ -88,8 +88,8 @@ def __encrypt(pargs):
     # Get the exected size of the filesystem source
     if pargs.source is not None and pargs.expected_size is None:
         pargs.expected_size = int(
-            subprocess.check_output(("du", "-sB1", pargs.source)).split("\t")[
-                0])
+            subprocess.check_output(("du", "-sB1",
+                                     pargs.source)).split("\t")[0])
 
     # If the target is a directory, start by tarring that up
     if isdir:
@@ -161,15 +161,20 @@ def __decrypt(pargs):
         outfd = open(pargs.destination, "wb")
 
     s3proc = subprocess.Popen(
-        ("aws", "s3", "cp", "s3://%s/%s" % (pargs.s3_bucket, pargs.s3_key),
-         "-"),
+        ("aws", "s3", "cp", "s3://%s/%s" %
+         (pargs.s3_bucket, pargs.s3_key), "-"),
         stdout=subprocess.PIPE)
 
-    cryptproc = subprocess.Popen(
-        ("openssl", "enc", "-d", "-%s" % symmetric_algorithm, "-k",
-         symmetric_key),
-        stdin=s3proc.stdout,
-        stdout=outfd)
+    if pargs.no_decrypt:
+        print base64.b64encode(symmetric_key)
+        outfd.write(s3proc.stdout.read())
+        outfd.flush()
+    else:
+        cryptproc = subprocess.Popen(
+            ("openssl", "enc", "-d", "-%s" % symmetric_algorithm, "-k",
+             symmetric_key),
+            stdin=s3proc.stdout,
+            stdout=outfd)
 
     if pargs.destination is None:
         cryptproc.communicate()
@@ -184,7 +189,8 @@ def __decrypt(pargs):
 
 def __main():
     parser = argparse.ArgumentParser(
-        description="""Accepts either a path or from stdin, and puts the resulting content
+        description=
+        """Accepts either a path or from stdin, and puts the resulting content
         into S3 encrypted with symmetric crypto, embeddeding the crypto keys in the object
         metadata encrypted with a PGP key.""")
     subparsers = parser.add_subparsers(dest="command")
@@ -192,13 +198,15 @@ def __main():
     encrypt.add_argument(
         "--pgp-recipient",
         required=True,
-        help="""Email address, key ID, or other indicator of the PGP public key to use for
+        help=
+        """Email address, key ID, or other indicator of the PGP public key to use for
         encrypting the symmetric key component""")
     encrypt.add_argument(
         "--source",
         required=False,
         default=None,
-        help="""If specified, points to the local directory or file to send to S3. If
+        help=
+        """If specified, points to the local directory or file to send to S3. If
         omitted, stdin is assumed to be the source.""")
     encrypt.add_argument(
         "--s3-bucket",
@@ -208,13 +216,15 @@ def __main():
         "--s3-key",
         required=False,
         default=None,
-        help="""Key name for the output object. Required if stdin is the source, and option
+        help=
+        """Key name for the output object. Required if stdin is the source, and option
         if the source is a filesystem location.""")
     encrypt.add_argument(
         "--expected-size",
         required=False,
         default=None,
-        help="""The expected size of the input. For filesystem sources this is determined
+        help=
+        """The expected size of the input. For filesystem sources this is determined
         automatically if this is not given, but for stdin sources, this should be
         specified. This is passed directly to the option of the same name in the AWS CLI s3
         cp command. Without this command, uploads are limited to about 100GiB."""
@@ -223,7 +233,8 @@ def __main():
         "--symmetric-algorithm",
         required=False,
         default="aes-256-cbc",
-        help="""Cipher to pass to OpenSSL for encryption. Must be supported by OpenSSL."""
+        help=
+        """Cipher to pass to OpenSSL for encryption. Must be supported by OpenSSL."""
     )
     decrypt = subparsers.add_parser("decrypt")
     decrypt.add_argument(
@@ -235,15 +246,25 @@ def __main():
     decrypt.add_argument(
         "--destination",
         required=False,
-        help="""Filesystem location to place the resulting stream. If omitted it defaults
+        help=
+        """Filesystem location to place the resulting stream. If omitted it defaults
         to stdout.""")
     decrypt.add_argument(
         "--untar",
         required=False,
         default=False,
         action="store_true",
-        help="""Attempt to untar the decrypted content. NO checks are made to ensure that the output
+        help=
+        """Attempt to untar the decrypted content. NO checks are made to ensure that the output
         data is a tarfile, and if it isn't this will quickly fail.""")
+    decrypt.add_argument(
+        "--no-decrypt",
+        required=False,
+        action="store_true",
+        default=False,
+        help=
+        """Do not decrypt the contents, instead dump the b64 symmetric key to
+         stdout, and write the encrypted contents to the normal channel""")
     pargs = parser.parse_args()
 
     if pargs.command == "encrypt":
